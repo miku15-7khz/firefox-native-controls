@@ -1,8 +1,8 @@
 # Firefox Native Controls
 
-Simple source code patches that re-enable native controls on Firefox. Requires modifying Firefox installation files, but you don't need to use a custom build of Firefox altogether.
+Simple source code patches that re-enable and reimplement native controls for modern versions of Firefox. Requires modifying Firefox installation files, but you don't need to use a custom build of Firefox altogether.
 
-It is still recommended that you use ESR and disable automatic updates. Unfortunately, updating is just a sacrifice you have to make to theming. However, I may write a custom updater with this mod in consideration, eventually.
+It is still recommended that you use ESR and disable automatic updates. Unfortunately, updating is just a sacrifice you have to make to theming. However, I may write a custom updater with this mod in consideration, eventually. **All prebuilt releases are distributed for ESR releases of Firefox.**
 
 The only potential caveat: Widevine support. I don't know if this is controlled by `xul.dll` or not, but there is a file beside it called `xul.dll.sig` in official Firefox builds that has information regarding a Widevine certificate (and is otherwise seemingly completely unused). If you are based, this will not matter to you.
 
@@ -11,6 +11,7 @@ At the moment, it is required that you still manually disable non-native control
 ## Change documentation
 
 - [Scrollbars](docs/scrollbars.md)
+- Other controls (statusbar, resizer, tooltips): Much of the same applies here as it does to scrollbars. Old code was lifted from previous versions of Firefox, typically the commit just before removal, and for the most part just copy/pasted back in directly.
 
 ## Installing prebuilt versions
 
@@ -24,8 +25,9 @@ Step-by-step:
 
 1. Download the release on the right side of the page. If your version is unsupported, then you will have to build the changes from source.
 2. Replace `C:\Program Files\Mozilla Firefox\xul.dll` with the downloaded `xul.dll` file.
-3. Make sure that `widget.non-native-theme.enabled` is false in `about:config`.
-4. Close all Firefox processes in Task Manager and restart the browser.
+3. Restart Firefox.
+
+**Note:** Unfortunately, it's not possible to create one distribution that works across patches. This is because the XUL version check is baked into `firefox.exe` rather than `xul.dll`.
 
 ## Building from source
 
@@ -66,7 +68,3 @@ After building, the `xul.dll` file can be found in somewhere like `obj-x86_64-pc
 Also because Firefox uses Mercurial rather than Git, I found it would be more trouble than it's worth to attempt to post a modified codebase onto GitHub. I initially thought to fork [mozilla/gecko-dev](//github.com/mozilla/gecko-dev), but the commit identifiers for this repository do not at all align with their Mercurial revision identifiers, so it is less than worthless. Also, I found I couldn't even find certain tags which were useful to access in the Mercurial version.
 
 As a result, I just `hg export` the patches I make, which makes them pretty easy to bring back into the codebase later.
-
-## Will you do other controls?
-
-Probably. My main focus with the initial release was restoring native scrollbars. I didn't see other controls as important, since their native appearances could be better replicated with CSS.
