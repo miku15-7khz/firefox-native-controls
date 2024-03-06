@@ -1,0 +1,1523 @@
+# HG changeset patch
+# User daylin <dcoop2004@gmail.com>
+# Date 1706142439 25200
+#      Wed Jan 24 17:27:19 2024 -0700
+# Node ID 44299c5e5559ced8a0915c38439bb1f186c83d18
+# Parent  17fcbdf6426663c10da5d0ba21927e71184304c3
+Native controls for ESR 115.6.0 (R2 squashed)
+***
+Native controls for ESR 115.6.0 (rev 2)
+
+diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
+--- a/layout/style/nsMediaFeatures.cpp
++++ b/layout/style/nsMediaFeatures.cpp
+@@ -33,6 +33,10 @@
+ #  include "mozilla/WindowsVersion.h"
+ #endif
+ 
++// -- native controls patch includes --
++#include "mozilla/StaticPrefs_widget.h"
++// -- end native controls patch includes --
++
+ using namespace mozilla;
+ using mozilla::dom::DisplayMode;
+ using mozilla::dom::Document;
+@@ -251,10 +255,14 @@ bool Gecko_MediaFeatures_MatchesPlatform
+     case StylePlatform::WindowsWin10:
+     case StylePlatform::WindowsWin7:
+     case StylePlatform::WindowsWin8: {
+-      if (IsWin10OrLater()) {
++      int overridePref =
++          StaticPrefs::widget_ev_native_controls_patch_override_win_version();
++      bool doesOverride = overridePref > 0;
++
++      if ((!doesOverride && IsWin10OrLater()) || overridePref == 10) {
+         return aPlatform == StylePlatform::WindowsWin10;
+       }
+-      if (IsWin8OrLater()) {
++      if ((!doesOverride && IsWin8OrLater()) || overridePref == 8) {
+         return aPlatform == StylePlatform::WindowsWin8;
+       }
+       return aPlatform == StylePlatform::WindowsWin7;
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -15289,13 +15289,39 @@
+ # Prefs starting with "widget."
+ #---------------------------------------------------------------------------
+ 
++- name: widget.ev-native-controls-patch.override-win-version
++  type: int32_t
++  value: 0
++  mirror: always
++  
++- name: widget.ev-native-controls-patch.force-dwm-report-off
++  type: bool
++  value: false
++  mirror: always
++  
++- name: widget.ev-native-controls-patch.force-glass-reporting
++  type: int32_t
++  value: 0
++  mirror: always
++  
++- name: widget.ev-native-controls-patch.override-aero-caption-buttons-mask-width
++  type: int32_t
++  value: 0
++  mirror: always
++  
++- name: widget.ev-native-controls-patch.override-aero-caption-buttons-mask-height
++  type: int32_t
++  value: 0
++  mirror: always
++
+ # Global user preference for disabling native theme in content processes.
+ #
+ # NOTE(emilio): When changing this make sure to update the non_native_theme
+ # entry in python/mozbuild/mozbuild/mozinfo.py and test_fission_autostart.py
++# ^^^ no ~ev
+ - name: widget.non-native-theme.enabled
+   type: RelaxedAtomicBool
+-  value: true
++  value: false
+   mirror: always
+ 
+ # Whether the non-native theme should always use system colors. Useful mostly
+diff --git a/servo/components/style/gecko/media_features.rs b/servo/components/style/gecko/media_features.rs
+--- a/servo/components/style/gecko/media_features.rs
++++ b/servo/components/style/gecko/media_features.rs
+@@ -614,6 +614,10 @@ fn eval_scripting(context: &Context, que
+     }
+ }
+ 
++fn eval_moz_ev_native_controls_patch(context: &Context) -> bool {
++	true
++}
++
+ fn eval_moz_windows_non_native_menus(context: &Context) -> bool {
+     unsafe { bindings::Gecko_MediaFeatures_WindowsNonNativeMenus(context.device().document()) }
+ }
+@@ -694,7 +698,7 @@ macro_rules! bool_pref_feature {
+ /// to support new types in these entries and (2) ensuring that either
+ /// nsPresContext::MediaFeatureValuesChanged is called when the value that
+ /// would be returned by the evaluator function could change.
+-pub static MEDIA_FEATURES: [QueryFeatureDescription; 67] = [
++pub static MEDIA_FEATURES: [QueryFeatureDescription; 68] = [
+     feature!(
+         atom!("width"),
+         AllowsRanges::Yes,
+@@ -970,6 +974,13 @@ pub static MEDIA_FEATURES: [QueryFeature
+         Evaluator::BoolInteger(eval_moz_overlay_scrollbars),
+         FeatureFlags::CHROME_AND_UA_ONLY,
+     ),
++	// Custom feature for native controls patch for userstyles to detect it:
++	feature!(
++		atom!("-moz-ev-native-controls-patch"),
++		AllowsRanges::No,
++		Evaluator::BoolInteger(eval_moz_ev_native_controls_patch),
++		FeatureFlags::CHROME_AND_UA_ONLY,
++	),
+     lnf_int_feature!(
+         atom!("-moz-scrollbar-start-backward"),
+         ScrollArrowStyle,
+diff --git a/servo/components/style/values/specified/box.rs b/servo/components/style/values/specified/box.rs
+--- a/servo/components/style/values/specified/box.rs
++++ b/servo/components/style/values/specified/box.rs
+@@ -1516,6 +1516,13 @@ pub enum Appearance {
+     Range,
+     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
+     RangeThumb,
++	/// The resizer background area in a status bar for the resizer widget in
++    /// the corner of a window.
++    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
++    Resizerpanel,
++    /// The resizer itself.
++    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
++    Resizer,
+     /// The scrollbar slider
+     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
+     ScrollbarHorizontal,
+@@ -1566,6 +1573,9 @@ pub enum Appearance {
+     /// A status bar in a main application window.
+     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
+     Statusbar,
++	/// A single pane of a status bar.
++    #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
++    Statusbarpanel,
+     /// A single tab in a tab widget.
+     #[parse(condition = "ParserContext::in_ua_or_chrome_sheet")]
+     Tab,
+diff --git a/widget/ScrollbarDrawingWin.cpp b/widget/ScrollbarDrawingWin.cpp
+--- a/widget/ScrollbarDrawingWin.cpp
++++ b/widget/ScrollbarDrawingWin.cpp
+@@ -109,6 +109,7 @@ Maybe<nsITheme::Transparency> ScrollbarD
+     case StyleAppearance::ScrollbarHorizontal:
+     case StyleAppearance::ScrollbarVertical:
+     case StyleAppearance::Scrollcorner:
++    case StyleAppearance::Statusbar:
+       // Knowing that scrollbars and statusbars are opaque improves
+       // performance, because we create layers for them. This better be
+       // true across all Windows themes! If it's not true, we should
+diff --git a/widget/nsNativeTheme.cpp b/widget/nsNativeTheme.cpp
+--- a/widget/nsNativeTheme.cpp
++++ b/widget/nsNativeTheme.cpp
+@@ -209,6 +209,31 @@ bool nsNativeTheme::IsWidgetStyled(nsPre
+     return false;
+   }
+ 
++  // Resizers have some special handling, dependent on whether in a scrollable
++  // container or not. If so, use the scrollable container's to determine
++  // whether the style is overriden instead of the resizer. This allows a
++  // non-native transparent resizer to be used instead. Otherwise, we just
++  // fall through and return false.
++  if (aAppearance == StyleAppearance::Resizer) {
++    nsIFrame* parentFrame = aFrame->GetParent();
++    if (parentFrame && parentFrame->IsScrollFrame()) {
++      // if the parent is a scrollframe, the resizer should be native themed
++      // only if the scrollable area doesn't override the widget style.
++      //
++      // note that the condition below looks a bit suspect but it's the right
++      // one. If there's no valid appearance, then we should return true, it's
++      // effectively the same as if it had overridden the appearance.
++      parentFrame = parentFrame->GetParent();
++      if (!parentFrame) {
++        return false;
++      }
++      auto parentAppearance =
++          parentFrame->StyleDisplay()->EffectiveAppearance();
++      return parentAppearance == StyleAppearance::None ||
++             IsWidgetStyled(aPresContext, parentFrame, parentAppearance);
++    }
++  }
++
+   /**
+    * Progress bar appearance should be the same for the bar and the container
+    * frame. nsProgressFrame owns the logic and will tell us what we should do.
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -19,6 +19,10 @@
+ #include "gfxFontConstants.h"
+ #include "gfxWindowsPlatform.h"
+ 
++// -- native controls patch includes --
++#include "mozilla/StaticPrefs_widget.h"
++// -- end native controls patch includes --
++
+ using namespace mozilla;
+ using namespace mozilla::widget;
+ 
+@@ -519,6 +523,11 @@ nsresult nsLookAndFeel::NativeGetInt(Int
+       aResult = nsUXThemeData::IsDefaultWindowTheme();
+       break;
+     case IntID::DWMCompositor:
++      if (StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()) {
++        aResult = 0;
++        break;
++      }
++
+       aResult = gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
+       break;
+     case IntID::WindowsAccentColorInTitlebar: {
+@@ -552,11 +561,24 @@ nsresult nsLookAndFeel::NativeGetInt(Int
+ 
+       mDwmKey->Close();
+     } break;
+-    case IntID::WindowsGlass:
++    case IntID::WindowsGlass: {
++      int reportingPref =
++          StaticPrefs::widget_ev_native_controls_patch_force_glass_reporting();
++      if (reportingPref != 0) {
++        aResult = (reportingPref == 1) ? 1 : 0;
++        break;
++      }
++
++      int overrideWinVer =
++          StaticPrefs::widget_ev_native_controls_patch_override_win_version();
++      bool isWin8OrLater =
++          (overrideWinVer == 0 && IsWin8OrLater()) || overrideWinVer >= 8;
++
+       // Aero Glass is only available prior to Windows 8 when DWM is used.
+       aResult = (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled() &&
+-                 !IsWin8OrLater());
++                 isWin8OrLater);
+       break;
++    }
+     case IntID::AlertNotificationOrigin:
+       aResult = 0;
+       {
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -40,6 +40,7 @@
+ #include "nsWindow.h"
+ #include "prinrval.h"
+ #include "WinUtils.h"
++#include "ScrollbarDrawingWin.h"
+ 
+ using namespace mozilla;
+ using namespace mozilla::gfx;
+@@ -68,8 +69,11 @@ nsNativeThemeWin::~nsNativeThemeWin() { 
+ auto nsNativeThemeWin::IsWidgetNonNative(nsIFrame* aFrame,
+                                          StyleAppearance aAppearance)
+     -> NonNative {
+-  if (IsWidgetScrollbarPart(aAppearance) ||
+-      aAppearance == StyleAppearance::FocusOutline) {
++  if (IsWidgetScrollbarPart(aAppearance)) {
++    return NonNative::No;
++  }
++
++  if (aAppearance == StyleAppearance::FocusOutline) {
+     return NonNative::Always;
+   }
+ 
+@@ -699,6 +703,8 @@ mozilla::Maybe<nsUXThemeClass> nsNativeT
+     case StyleAppearance::Textfield:
+     case StyleAppearance::Textarea:
+       return Some(eUXEdit);
++    case StyleAppearance::Tooltip:
++      return Some(eUXTooltip);
+     case StyleAppearance::Toolbox:
+       return Some(eUXRebar);
+     case StyleAppearance::MozWinMediaToolbox:
+@@ -718,12 +724,27 @@ mozilla::Maybe<nsUXThemeClass> nsNativeT
+     case StyleAppearance::Tabpanel:
+     case StyleAppearance::Tabpanels:
+       return Some(eUXTab);
++    case StyleAppearance::ScrollbarVertical:
++    case StyleAppearance::ScrollbarHorizontal:
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight:
++    case StyleAppearance::ScrollbarthumbVertical:
++    case StyleAppearance::ScrollbarthumbHorizontal:
++    case StyleAppearance::Scrollcorner:
++      return Some(eUXScrollbar);
+     case StyleAppearance::Range:
+     case StyleAppearance::RangeThumb:
+       return Some(eUXTrackbar);
+     case StyleAppearance::SpinnerUpbutton:
+     case StyleAppearance::SpinnerDownbutton:
+       return Some(eUXSpin);
++    case StyleAppearance::Statusbar:
++    case StyleAppearance::Statusbarpanel:
++    case StyleAppearance::Resizerpanel:
++    case StyleAppearance::Resizer:
++      return Some(eUXStatus);
+     case StyleAppearance::Menulist:
+     case StyleAppearance::MenulistButton:
+     case StyleAppearance::MozMenulistArrowButton:
+@@ -912,6 +933,11 @@ nsresult nsNativeThemeWin::GetThemePartA
+ 
+       return NS_OK;
+     }
++    case StyleAppearance::Tooltip: {
++      aPart = TTP_STANDARD;
++      aState = TS_NORMAL;
++      return NS_OK;
++    }
+     case StyleAppearance::ProgressBar: {
+       bool vertical = IsVerticalProgress(aFrame);
+       aPart = vertical ? PP_BARVERT : PP_BAR;
+@@ -967,6 +993,66 @@ nsresult nsNativeThemeWin::GetThemePartA
+       aState = TS_NORMAL;
+       return NS_OK;
+     }
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight: {
++      aPart = SP_BUTTON;
++      aState = (int(aAppearance) - int(StyleAppearance::ScrollbarbuttonUp)) * 4;
++      ElementState eventState = GetContentState(aFrame, aAppearance);
++      if (!aFrame)
++        aState += TS_NORMAL;
++      else if (eventState.HasState(ElementState::DISABLED))
++        aState += TS_DISABLED;
++      else {
++        nsIFrame* parent = aFrame->GetParent();
++        ElementState parentState = GetContentState(
++            parent, parent->StyleDisplay()->EffectiveAppearance());
++        if (eventState.HasAllStates(ElementState::HOVER | ElementState::ACTIVE))
++          aState += TS_ACTIVE;
++        else if (eventState.HasState(ElementState::HOVER))
++          aState += TS_HOVER;
++        else if (parentState.HasState(ElementState::HOVER))
++          aState =
++              (int(aAppearance) - int(StyleAppearance::ScrollbarbuttonUp)) +
++              SP_BUTTON_IMPLICIT_HOVER_BASE;
++        else
++          aState += TS_NORMAL;
++      }
++      return NS_OK;
++    }
++    case StyleAppearance::ScrollbarHorizontal:
++    case StyleAppearance::ScrollbarVertical: {
++      aPart = (aAppearance == StyleAppearance::ScrollbarHorizontal)
++                  ? SP_TRACKSTARTHOR
++                  : SP_TRACKSTARTVERT;
++      aState = TS_NORMAL;
++      return NS_OK;
++    }
++    case StyleAppearance::ScrollbarthumbHorizontal:
++    case StyleAppearance::ScrollbarthumbVertical: {
++      aPart = (aAppearance == StyleAppearance::ScrollbarthumbHorizontal)
++                  ? SP_THUMBHOR
++                  : SP_THUMBVERT;
++      ElementState eventState = GetContentState(aFrame, aAppearance);
++      if (!aFrame)
++        aState = TS_NORMAL;
++      else if (eventState.HasState(ElementState::DISABLED))
++        aState = TS_DISABLED;
++      else {
++        if (eventState.HasState(
++                ElementState::ACTIVE))  // Hover is not also a requirement for
++                                        // the thumb, since the drag is not
++                                        // canceled when you move outside the
++                                        // thumb.
++          aState = TS_ACTIVE;
++        else if (eventState.HasState(ElementState::HOVER))
++          aState = TS_HOVER;
++        else
++          aState = TS_NORMAL;
++      }
++      return NS_OK;
++    }
+     case StyleAppearance::Range: {
+       if (IsRangeHorizontal(aFrame)) {
+         aPart = TKP_TRACK;
+@@ -1004,6 +1090,11 @@ nsresult nsNativeThemeWin::GetThemePartA
+       }
+       return NS_OK;
+     }
++    case StyleAppearance::Scrollcorner: {
++      aState = 0;
++      aPart = RP_BACKGROUND;
++      return NS_OK;
++    }
+     case StyleAppearance::SpinnerUpbutton:
+     case StyleAppearance::SpinnerDownbutton: {
+       aPart = (aAppearance == StyleAppearance::SpinnerUpbutton) ? SPNP_UP
+@@ -1021,7 +1112,8 @@ nsresult nsNativeThemeWin::GetThemePartA
+     case StyleAppearance::Toolbox:
+     case StyleAppearance::MozWinMediaToolbox:
+     case StyleAppearance::MozWinCommunicationsToolbox:
+-    case StyleAppearance::MozWinBrowsertabbarToolbox: {
++    case StyleAppearance::MozWinBrowsertabbarToolbox:
++    case StyleAppearance::Statusbar: {
+       aState = 0;
+       aPart = RP_BACKGROUND;
+       return NS_OK;
+@@ -1042,6 +1134,26 @@ nsresult nsNativeThemeWin::GetThemePartA
+       }
+       return NS_OK;
+     }
++    case StyleAppearance::Statusbarpanel:
++    case StyleAppearance::Resizerpanel:
++    case StyleAppearance::Resizer: {
++      switch (aAppearance) {
++        case StyleAppearance::Statusbarpanel:
++          aPart = 1;
++          break;
++        case StyleAppearance::Resizerpanel:
++          aPart = 2;
++          break;
++        case StyleAppearance::Resizer:
++          aPart = 3;
++          break;
++        default:
++          MOZ_ASSERT_UNREACHABLE("Oops, we're missing a case");
++          aPart = 1;  // just something valid
++      }
++      aState = TS_NORMAL;
++      return NS_OK;
++    }
+     case StyleAppearance::Treeview:
+     case StyleAppearance::Listbox: {
+       aPart = TREEVIEW_BODY;
+@@ -1355,6 +1467,11 @@ nsNativeThemeWin::DrawWidgetBackground(g
+                                        const nsRect& aRect,
+                                        const nsRect& aDirtyRect,
+                                        DrawOverflow aDrawOverflow) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+   if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
+     return Theme::DrawWidgetBackground(aContext, aFrame, aAppearance, aRect,
+                                        aDirtyRect, aDrawOverflow);
+@@ -1366,7 +1483,7 @@ nsNativeThemeWin::DrawWidgetBackground(g
+                                        aDirtyRect);
+ 
+   // ^^ without the right sdk, assume xp theming and fall through.
+-  if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++  if (dwmCompositionEnabled) {
+     switch (aAppearance) {
+       case StyleAppearance::MozWindowTitlebar:
+       case StyleAppearance::MozWindowTitlebarMaximized:
+@@ -1631,7 +1748,8 @@ RENDER_AGAIN:
+                         IsFrameRTL(aFrame));
+   }
+   // The following widgets need to be RTL-aware
+-  else if (aAppearance == StyleAppearance::MozMenulistArrowButton) {
++  else if (aAppearance == StyleAppearance::Resizer ||
++           aAppearance == StyleAppearance::MozMenulistArrowButton) {
+     DrawThemeBGRTLAware(theme, hdc, part, state, &widgetRect, &clipRect,
+                         IsFrameRTL(aFrame));
+   } else if (aAppearance == StyleAppearance::NumberInput ||
+@@ -1696,6 +1814,26 @@ RENDER_AGAIN:
+     widgetRect.bottom = widgetRect.top + TB_SEPARATOR_HEIGHT;
+     DrawThemeEdge(theme, hdc, RP_BAND, 0, &widgetRect, EDGE_ETCHED, BF_TOP,
+                   nullptr);
++  } else if (aAppearance == StyleAppearance::ScrollbarthumbHorizontal ||
++             aAppearance == StyleAppearance::ScrollbarthumbVertical) {
++    // Draw the decorative gripper for the scrollbar thumb button, if it fits
++
++    SIZE gripSize;
++    MARGINS thumbMgns;
++    int gripPart = (aAppearance == StyleAppearance::ScrollbarthumbHorizontal)
++                       ? SP_GRIPPERHOR
++                       : SP_GRIPPERVERT;
++
++    if (GetThemePartSize(theme, hdc, gripPart, state, nullptr, TS_TRUE,
++                         &gripSize) == S_OK &&
++        GetThemeMargins(theme, hdc, part, state, TMT_CONTENTMARGINS, nullptr,
++                        &thumbMgns) == S_OK &&
++        gripSize.cx + thumbMgns.cxLeftWidth + thumbMgns.cxRightWidth <=
++            widgetRect.right - widgetRect.left &&
++        gripSize.cy + thumbMgns.cyTopHeight + thumbMgns.cyBottomHeight <=
++            widgetRect.bottom - widgetRect.top) {
++      DrawThemeBackground(theme, hdc, gripPart, state, &widgetRect, &clipRect);
++    }
+   }
+ 
+   nativeDrawing.EndNativeDrawing();
+@@ -1745,7 +1883,11 @@ LayoutDeviceIntMargin nsNativeThemeWin::
+   if (!themeClass.isNothing()) {
+     theme = nsUXThemeData::GetTheme(themeClass.value());
+   }
+-  if (!theme) {
++
++  // Classic scrollbar thumbs require classic borders. The theme procedure will
++  // break horizontal scrollbar thumbs otherwise.
++  if (aAppearance == StyleAppearance::ScrollbarthumbVertical ||
++      aAppearance == StyleAppearance::ScrollbarthumbHorizontal || !theme) {
+     result = ClassicGetWidgetBorder(aContext, aFrame, aAppearance);
+     ScaleForFrameDPI(&result, aFrame);
+     return result;
+@@ -1756,7 +1898,12 @@ LayoutDeviceIntMargin nsNativeThemeWin::
+       aAppearance == StyleAppearance::MozWinMediaToolbox ||
+       aAppearance == StyleAppearance::MozWinCommunicationsToolbox ||
+       aAppearance == StyleAppearance::MozWinBrowsertabbarToolbox ||
++      aAppearance == StyleAppearance::Statusbar ||
++      aAppearance == StyleAppearance::Resizer ||
+       aAppearance == StyleAppearance::Tabpanel ||
++      aAppearance == StyleAppearance::ScrollbarHorizontal ||
++      aAppearance == StyleAppearance::ScrollbarVertical ||
++      aAppearance == StyleAppearance::Scrollcorner ||
+       aAppearance == StyleAppearance::Menuitem ||
+       aAppearance == StyleAppearance::Checkmenuitem ||
+       aAppearance == StyleAppearance::Radiomenuitem ||
+@@ -1814,6 +1961,16 @@ bool nsNativeThemeWin::GetWidgetPadding(
+                                         nsIFrame* aFrame,
+                                         StyleAppearance aAppearance,
+                                         LayoutDeviceIntMargin* aResult) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
++  int overrideWinVer =
++      StaticPrefs::widget_ev_native_controls_patch_override_win_version();
++  bool isWindows10OrLater =
++      (overrideWinVer == 0 && IsWin10OrLater()) || overrideWinVer >= 10;
++
+   switch (aAppearance) {
+     // Radios and checkboxes return a fixed size in GetMinimumWidgetSize
+     // and have a meaningful baseline, so they can't have
+@@ -1833,7 +1990,7 @@ bool nsNativeThemeWin::GetWidgetPadding(
+     aResult->SizeTo(0, 0, 0, 0);
+ 
+     // aero glass doesn't display custom buttons
+-    if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) return true;
++    if (dwmCompositionEnabled) return true;
+ 
+     // button padding for standard windows
+     if (aAppearance == StyleAppearance::MozWindowButtonBox) {
+@@ -1852,7 +2009,8 @@ bool nsNativeThemeWin::GetWidgetPadding(
+     // adding padding to the top of the window that is the size of the caption
+     // area and then "removing" it when calculating the client area for
+     // WM_NCCALCSIZE.  See bug 618353,
+-    if (!IsWin10OrLater() &&
++
++    if (!isWindows10OrLater &&
+         aAppearance == StyleAppearance::MozWindowTitlebarMaximized) {
+       nsCOMPtr<nsIWidget> rootWidget;
+       if (WinUtils::HasSystemMetricsForDpi()) {
+@@ -2006,6 +2164,11 @@ bool nsNativeThemeWin::GetWidgetOverflow
+ LayoutDeviceIntSize nsNativeThemeWin::GetMinimumWidgetSize(
+     nsPresContext* aPresContext, nsIFrame* aFrame,
+     StyleAppearance aAppearance) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+   if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+     return Theme::GetMinimumWidgetSize(aPresContext, aFrame, aAppearance);
+   }
+@@ -2030,6 +2193,7 @@ LayoutDeviceIntSize nsNativeThemeWin::Ge
+     case StyleAppearance::MozWinCommunicationsToolbox:
+     case StyleAppearance::MozWinBrowsertabbarToolbox:
+     case StyleAppearance::Toolbar:
++    case StyleAppearance::Statusbar:
+     case StyleAppearance::Progresschunk:
+     case StyleAppearance::Tabpanels:
+     case StyleAppearance::Tabpanel:
+@@ -2051,6 +2215,14 @@ LayoutDeviceIntSize nsNativeThemeWin::Ge
+   //  Windows appears to always use metrics when drawing standard scrollbars)
+   THEMESIZE sizeReq = TS_TRUE;  // Best-fit size
+   switch (aAppearance) {
++    case StyleAppearance::ScrollbarthumbHorizontal:
++    case StyleAppearance::ScrollbarthumbVertical:
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight:
++    case StyleAppearance::ScrollbarHorizontal:
++    case StyleAppearance::ScrollbarVertical:
+     case StyleAppearance::MozMenulistArrowButton: {
+       auto result = ClassicGetMinimumWidgetSize(aFrame, aAppearance);
+       ScaleForFrameDPI(&result, aFrame);
+@@ -2086,6 +2258,9 @@ LayoutDeviceIntSize nsNativeThemeWin::Ge
+       sizeReq = TS_MIN;
+       break;
+ 
++    case StyleAppearance::Resizer:
++      break;
++
+     case StyleAppearance::RangeThumb: {
+       LayoutDeviceIntSize result(12, 20);
+       if (!IsRangeHorizontal(aFrame)) {
+@@ -2095,6 +2270,17 @@ LayoutDeviceIntSize nsNativeThemeWin::Ge
+       return result;
+     }
+ 
++    case StyleAppearance::Scrollcorner: {
++      if (nsLookAndFeel::GetInt(nsLookAndFeel::IntID::UseOverlayScrollbars) !=
++          0) {
++        LayoutDeviceIntSize result(::GetSystemMetrics(SM_CXHSCROLL),
++                                   ::GetSystemMetrics(SM_CYVSCROLL));
++        ScaleForFrameDPI(&result, aFrame);
++        return result;
++      }
++      break;
++    }
++
+     case StyleAppearance::Separator: {
+       // that's 2px left margin, 2px right margin and 2px separator
+       // (the margin is drawn as part of the separator, though)
+@@ -2158,7 +2344,7 @@ LayoutDeviceIntSize nsNativeThemeWin::Ge
+ 
+     case StyleAppearance::MozWindowButtonBox:
+     case StyleAppearance::MozWindowButtonBoxMaximized: {
+-      if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++      if (dwmCompositionEnabled) {
+         SIZE sz = nsUXThemeData::GetCommandButtonBoxMetrics();
+         LayoutDeviceIntSize result(sz.cx,
+                                    sz.cy - GetSystemMetrics(SM_CYFRAME) -
+@@ -2200,7 +2386,11 @@ nsNativeThemeWin::WidgetStateChanged(nsI
+       aAppearance == StyleAppearance::MozWinCommunicationsToolbox ||
+       aAppearance == StyleAppearance::MozWinBrowsertabbarToolbox ||
+       aAppearance == StyleAppearance::Toolbar ||
++      aAppearance == StyleAppearance::Statusbar ||
++      aAppearance == StyleAppearance::Statusbarpanel ||
++      aAppearance == StyleAppearance::Resizerpanel ||
+       aAppearance == StyleAppearance::Progresschunk ||
++      aAppearance == StyleAppearance::Tooltip ||
+       aAppearance == StyleAppearance::ProgressBar ||
+       aAppearance == StyleAppearance::Tabpanels ||
+       aAppearance == StyleAppearance::Tabpanel ||
+@@ -2278,6 +2468,8 @@ bool nsNativeThemeWin::ThemeSupportsWidg
+   else
+     theme = GetTheme(aAppearance);
+ 
++  if (theme && aAppearance == StyleAppearance::Resizer) return true;
++
+   if (theme || ClassicThemeSupportsWidget(aFrame, aAppearance))
+     // turn off theming for some HTML widgets styled by the page
+     return (!IsWidgetStyled(aPresContext, aFrame, aAppearance));
+@@ -2346,6 +2538,14 @@ nsITheme::Transparency nsNativeThemeWin:
+   }
+ 
+   switch (aAppearance) {
++    case StyleAppearance::Resizer: {
++      // The classic native resizer has an opaque grey background which doesn't
++      // match the usually white background of the scrollable container, so
++      // only support the native resizer if not in a scrollframe.
++      nsIFrame* parentFrame = aFrame->GetParent();
++      return (!parentFrame || !parentFrame->IsScrollFrame()) ? eTransparent
++                                                             : eOpaque;
++    }
+     case StyleAppearance::MozWinBorderlessGlass:
+     case StyleAppearance::ProgressBar:
+     case StyleAppearance::Progresschunk:
+@@ -2359,7 +2559,8 @@ nsITheme::Transparency nsNativeThemeWin:
+   // For the classic theme we don't really have a way of knowing
+   if (!theme) {
+     // menu backgrounds which can't be themed are opaque
+-    if (aAppearance == StyleAppearance::Menupopup) {
++    if (aAppearance == StyleAppearance::Tooltip ||
++        aAppearance == StyleAppearance::Menupopup) {
+       return eOpaque;
+     }
+     return eUnknownTransparency;
+@@ -2386,6 +2587,13 @@ nsITheme::Transparency nsNativeThemeWin:
+ bool nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
+                                                   StyleAppearance aAppearance) {
+   switch (aAppearance) {
++    case StyleAppearance::Resizer: {
++      // The classic native resizer has an opaque grey background which doesn't
++      // match the usually white background of the scrollable container, so
++      // only support the native resizer if not in a scrollframe.
++      nsIFrame* parentFrame = aFrame->GetParent();
++      return !parentFrame || !parentFrame->IsScrollFrame();
++    }
+     case StyleAppearance::Menubar:
+     case StyleAppearance::Menupopup:
+       // Classic non-flat menus are handled almost entirely through CSS.
+@@ -2400,6 +2608,15 @@ bool nsNativeThemeWin::ClassicThemeSuppo
+     case StyleAppearance::Range:
+     case StyleAppearance::RangeThumb:
+     case StyleAppearance::Groupbox:
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight:
++    case StyleAppearance::ScrollbarthumbVertical:
++    case StyleAppearance::ScrollbarthumbHorizontal:
++    case StyleAppearance::ScrollbarVertical:
++    case StyleAppearance::ScrollbarHorizontal:
++    case StyleAppearance::Scrollcorner:
+     case StyleAppearance::Menulist:
+     case StyleAppearance::MenulistButton:
+     case StyleAppearance::MozMenulistArrowButton:
+@@ -2407,6 +2624,10 @@ bool nsNativeThemeWin::ClassicThemeSuppo
+     case StyleAppearance::SpinnerDownbutton:
+     case StyleAppearance::Listbox:
+     case StyleAppearance::Treeview:
++    case StyleAppearance::Tooltip:
++    case StyleAppearance::Statusbar:
++    case StyleAppearance::Statusbarpanel:
++    case StyleAppearance::Resizerpanel:
+     case StyleAppearance::ProgressBar:
+     case StyleAppearance::Progresschunk:
+     case StyleAppearance::Tab:
+@@ -2442,6 +2663,10 @@ LayoutDeviceIntMargin nsNativeThemeWin::
+     case StyleAppearance::Button:
+       result.top = result.left = result.bottom = result.right = 2;
+       break;
++    case StyleAppearance::Statusbar:
++      result.bottom = result.left = result.right = 0;
++      result.top = 2;
++      break;
+     case StyleAppearance::Listbox:
+     case StyleAppearance::Treeview:
+     case StyleAppearance::Menulist:
+@@ -2452,6 +2677,17 @@ LayoutDeviceIntMargin nsNativeThemeWin::
+     case StyleAppearance::Textarea:
+       result.top = result.left = result.bottom = result.right = 2;
+       break;
++    case StyleAppearance::Statusbarpanel:
++    case StyleAppearance::Resizerpanel: {
++      result.top = 1;
++      result.left = 1;
++      result.bottom = 1;
++      result.right = aFrame->GetNextSibling() ? 3 : 1;
++      break;
++    }
++    case StyleAppearance::Tooltip:
++      result.top = result.left = result.bottom = result.right = 1;
++      break;
+     case StyleAppearance::ProgressBar:
+       result.top = result.left = result.bottom = result.right = 1;
+       break;
+@@ -2526,6 +2762,25 @@ LayoutDeviceIntSize nsNativeThemeWin::Cl
+       result.width = ::GetSystemMetrics(SM_CXVSCROLL);
+       result.height = 8;  // No good metrics available for this
+       break;
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++      result.width = ::GetSystemMetrics(SM_CXVSCROLL);
++      result.height = ::GetSystemMetrics(SM_CYVSCROLL);
++      break;
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight:
++      // For scrollbar-width:thin, we don't display the buttons.
++      if (!ScrollbarDrawing::IsScrollbarWidthThin(aFrame)) {
++        result.width = ::GetSystemMetrics(SM_CXHSCROLL);
++        result.height = ::GetSystemMetrics(SM_CYHSCROLL);
++      }
++      break;
++    case StyleAppearance::ScrollbarVertical:
++    case StyleAppearance::ScrollbarHorizontal:
++      // Sizing code needed after removal of XUL layout (around ESR 115)
++      result.width = ::GetSystemMetrics(SM_CYHSCROLL);
++      result.height = ::GetSystemMetrics(SM_CYHSCROLL);
++      break;
+     case StyleAppearance::RangeThumb: {
+       if (IsRangeHorizontal(aFrame)) {
+         result.width = 12;
+@@ -2536,6 +2791,35 @@ LayoutDeviceIntSize nsNativeThemeWin::Cl
+       }
+       break;
+     }
++    case StyleAppearance::ScrollbarthumbVertical:
++      result.width = ::GetSystemMetrics(SM_CXVSCROLL);
++      result.height = ::GetSystemMetrics(SM_CYVTHUMB);
++      // Without theming, divide the thumb size by two in order to look more
++      // native
++      if (!GetTheme(aAppearance)) {
++        result.height >>= 1;
++      }
++      // If scrollbar-width is thin, divide the thickness by two to make
++      // it look more compact.
++      if (ScrollbarDrawing::IsScrollbarWidthThin(aFrame)) {
++        result.width >>= 1;
++      }
++      break;
++    case StyleAppearance::ScrollbarthumbHorizontal:
++      result.width = ::GetSystemMetrics(SM_CXHTHUMB);
++      result.height = ::GetSystemMetrics(SM_CYHSCROLL);
++      // Without theming, divide the thumb size by two in order to look more
++      // native
++      if (TRUE || !GetTheme(aAppearance)) {
++        result.width >>= 1;
++      }
++      // If scrollbar-width is thin, divide the thickness by two to make
++      // it look more compact.
++      if (ScrollbarDrawing::IsScrollbarWidthThin(aFrame)) {
++        result.height >>= 1;
++      }
++
++      break;
+     case StyleAppearance::MozMenulistArrowButton:
+       result.width = ::GetSystemMetrics(SM_CXVSCROLL);
+       break;
+@@ -2550,11 +2834,21 @@ LayoutDeviceIntSize nsNativeThemeWin::Cl
+     case StyleAppearance::Textarea:
+     case StyleAppearance::Progresschunk:
+     case StyleAppearance::ProgressBar:
++    case StyleAppearance::Tooltip:
+     case StyleAppearance::Tab:
+     case StyleAppearance::Tabpanel:
+     case StyleAppearance::Tabpanels:
+       // no minimum widget size
+       break;
++    case StyleAppearance::Resizer: {
++      NONCLIENTMETRICS nc;
++      nc.cbSize = sizeof(nc);
++      if (SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(nc), &nc, 0))
++        result.width = result.height = abs(nc.lfStatusFont.lfHeight) + 4;
++      else
++        result.width = result.height = 15;
++      break;
++    }
+     case StyleAppearance::Menuseparator: {
+       result.width = 0;
+       result.height = 10;
+@@ -2732,7 +3026,16 @@ nsresult nsNativeThemeWin::ClassicGetThe
+     case StyleAppearance::MenulistButton:
+     case StyleAppearance::Range:
+     case StyleAppearance::RangeThumb:
++    case StyleAppearance::Statusbar:
++    case StyleAppearance::Statusbarpanel:
++    case StyleAppearance::Resizerpanel:
++    case StyleAppearance::ScrollbarthumbVertical:
++    case StyleAppearance::ScrollbarthumbHorizontal:
++    case StyleAppearance::ScrollbarVertical:
++    case StyleAppearance::ScrollbarHorizontal:
++    case StyleAppearance::Scrollcorner:
+     case StyleAppearance::Progresschunk:
++    case StyleAppearance::Tooltip:
+     case StyleAppearance::ProgressBar:
+     case StyleAppearance::Tab:
+     case StyleAppearance::Tabpanel:
+@@ -2777,6 +3080,39 @@ nsresult nsNativeThemeWin::ClassicGetThe
+ 
+       return NS_OK;
+     }
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight: {
++      ElementState contentState = GetContentState(aFrame, aAppearance);
++
++      aPart = DFC_SCROLL;
++      switch (aAppearance) {
++        case StyleAppearance::ScrollbarbuttonUp:
++          aState = DFCS_SCROLLUP;
++          break;
++        case StyleAppearance::ScrollbarbuttonDown:
++          aState = DFCS_SCROLLDOWN;
++          break;
++        case StyleAppearance::ScrollbarbuttonLeft:
++          aState = DFCS_SCROLLLEFT;
++          break;
++        case StyleAppearance::ScrollbarbuttonRight:
++          aState = DFCS_SCROLLRIGHT;
++          break;
++        default:
++          break;
++      }
++
++      if (contentState.HasState(ElementState::DISABLED)) {
++        aState |= DFCS_INACTIVE;
++      } else if (contentState.HasAllStates(ElementState::HOVER |
++                                           ElementState::ACTIVE)) {
++        aState |= DFCS_PUSHED | DFCS_FLAT;
++      }
++
++      return NS_OK;
++    }
+     case StyleAppearance::SpinnerUpbutton:
+     case StyleAppearance::SpinnerDownbutton: {
+       ElementState contentState = GetContentState(aFrame, aAppearance);
+@@ -2803,6 +3139,11 @@ nsresult nsNativeThemeWin::ClassicGetThe
+ 
+       return NS_OK;
+     }
++    case StyleAppearance::Resizer:
++      aPart = DFC_SCROLL;
++      aState =
++          (IsFrameRTL(aFrame) ? DFCS_SCROLLSIZEGRIPRIGHT : DFCS_SCROLLSIZEGRIP);
++      return NS_OK;
+     case StyleAppearance::Menuseparator:
+       aPart = 0;
+       aState = 0;
+@@ -3055,9 +3396,14 @@ RENDER_AGAIN:
+     // Draw controls supported by DrawFrameControl
+     case StyleAppearance::Checkbox:
+     case StyleAppearance::Radio:
++    case StyleAppearance::ScrollbarbuttonUp:
++    case StyleAppearance::ScrollbarbuttonDown:
++    case StyleAppearance::ScrollbarbuttonLeft:
++    case StyleAppearance::ScrollbarbuttonRight:
+     case StyleAppearance::SpinnerUpbutton:
+     case StyleAppearance::SpinnerDownbutton:
+-    case StyleAppearance::MozMenulistArrowButton: {
++    case StyleAppearance::MozMenulistArrowButton:
++    case StyleAppearance::Resizer: {
+       int32_t oldTA;
+       // setup DC to make DrawFrameControl draw correctly
+       oldTA = ::SetTextAlign(hdc, TA_TOP | TA_LEFT | TA_NOUPDATECP);
+@@ -3096,6 +3442,13 @@ RENDER_AGAIN:
+ 
+       break;
+     }
++      // Draw ToolTip background
++    case StyleAppearance::Tooltip:
++      ::FrameRect(hdc, &widgetRect, ::GetSysColorBrush(COLOR_WINDOWFRAME));
++      InflateRect(&widgetRect, -1, -1);
++      ::FillRect(hdc, &widgetRect, ::GetSysColorBrush(COLOR_INFOBK));
++
++      break;
+     case StyleAppearance::Groupbox:
+       ::DrawEdge(hdc, &widgetRect, EDGE_ETCHED, BF_RECT | BF_ADJUST);
+       ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_BTNFACE + 1));
+@@ -3106,10 +3459,27 @@ RENDER_AGAIN:
+       ::DrawEdge(hdc, &widgetRect, BDR_SUNKENOUTER, BF_RECT | BF_MIDDLE);
+       InflateRect(&widgetRect, -1, -1);
+       [[fallthrough]];
+-    case StyleAppearance::Tabpanel: {
++    case StyleAppearance::Tabpanel:
++    case StyleAppearance::Statusbar:
++    case StyleAppearance::Resizerpanel: {
+       ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_BTNFACE + 1));
+       break;
+     }
++    // Draw scrollbar thumb
++    case StyleAppearance::ScrollbarthumbVertical:
++    case StyleAppearance::ScrollbarthumbHorizontal:
++      ::DrawEdge(hdc, &widgetRect, EDGE_RAISED, BF_RECT | BF_MIDDLE);
++
++      break;
++      // Draw 3D inset statusbar panel
++    case StyleAppearance::Statusbarpanel: {
++      if (aFrame->GetNextSibling())
++        widgetRect.right -= 2;  // space between sibling status panels
++
++      ::DrawEdge(hdc, &widgetRect, BDR_SUNKENOUTER, BF_RECT | BF_MIDDLE);
++
++      break;
++    }
+     case StyleAppearance::RangeThumb: {
+       ElementState elementState = GetContentState(aFrame, aAppearance);
+ 
+@@ -3147,6 +3517,37 @@ RENDER_AGAIN:
+ 
+       break;
+     }
++      // Draw scrollbar track background
++    case StyleAppearance::ScrollbarVertical:
++    case StyleAppearance::ScrollbarHorizontal: {
++      // Windows fills in the scrollbar track differently
++      // depending on whether these are equal
++      DWORD color3D, colorScrollbar, colorWindow;
++
++      color3D = ::GetSysColor(COLOR_3DFACE);
++      colorWindow = ::GetSysColor(COLOR_WINDOW);
++      colorScrollbar = ::GetSysColor(COLOR_SCROLLBAR);
++
++      if ((color3D != colorScrollbar) && (colorWindow != colorScrollbar))
++        // Use solid brush
++        ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_SCROLLBAR + 1));
++      else {
++        DrawCheckedRect(hdc, widgetRect, COLOR_3DHILIGHT, COLOR_3DFACE,
++                        (HBRUSH)COLOR_SCROLLBAR + 1);
++      }
++      // XXX should invert the part of the track being clicked here
++      // but the track is never :active
++
++      break;
++    }
++    case StyleAppearance::Scrollcorner: {
++      ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_SCROLLBAR + 1));
++
++      // Are Mozilla fucking retarded? They added this in 2018
++      // (https://github.com/mozilla/gecko-dev/blob/7038d5f94456dcb558f7c7f6fe66d913070001c5/widget/windows/nsNativeThemeWin.cpp#L3793-L3795)
++      // and never fixed this fallthrough.
++      break;
++    }
+     case StyleAppearance::Progresschunk: {
+       nsIFrame* stateFrame = aFrame->GetParent();
+       ElementState elementState = GetContentState(stateFrame, aAppearance);
+diff --git a/widget/windows/nsUXThemeData.cpp b/widget/windows/nsUXThemeData.cpp
+--- a/widget/windows/nsUXThemeData.cpp
++++ b/widget/windows/nsUXThemeData.cpp
+@@ -14,6 +14,10 @@
+ #include "nsUXThemeConstants.h"
+ #include "gfxWindowsPlatform.h"
+ 
++// -- native controls patch includes --
++#include "mozilla/StaticPrefs_widget.h"
++// -- end native controls patch includes --
++
+ using namespace mozilla;
+ using namespace mozilla::widget;
+ 
+@@ -86,6 +90,8 @@ const wchar_t* nsUXThemeData::GetClassNa
+       return L"Button";
+     case eUXEdit:
+       return L"Edit";
++    case eUXTooltip:
++      return L"Tooltip";
+     case eUXRebar:
+       return L"Rebar";
+     case eUXMediaRebar:
+@@ -94,6 +100,8 @@ const wchar_t* nsUXThemeData::GetClassNa
+       return L"Communications::Rebar";
+     case eUXBrowserTabBarRebar:
+       return L"BrowserTabBar::Rebar";
++    case eUXScrollbar:
++      return L"Scrollbar";
+     case eUXToolbar:
+       return L"Toolbar";
+     case eUXMediaToolbar:
+@@ -108,6 +116,8 @@ const wchar_t* nsUXThemeData::GetClassNa
+       return L"Trackbar";
+     case eUXSpin:
+       return L"Spin";
++    case eUXStatus:
++      return L"Status";
+     case eUXCombobox:
+       return L"Combobox";
+     case eUXHeader:
+@@ -178,12 +188,26 @@ void nsUXThemeData::EnsureCommandButtonB
+ void nsUXThemeData::UpdateTitlebarInfo(HWND aWnd) {
+   if (!aWnd) return;
+ 
+-  if (!sTitlebarInfoPopulatedAero &&
+-      gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
++  if (!sTitlebarInfoPopulatedAero && dwmCompositionEnabled) {
+     RECT captionButtons;
+-    if (SUCCEEDED(DwmGetWindowAttribute(aWnd, DWMWA_CAPTION_BUTTON_BOUNDS,
+-                                        &captionButtons,
+-                                        sizeof(captionButtons)))) {
++    int overrideCaptionButtonsWidth = StaticPrefs::
++        widget_ev_native_controls_patch_override_aero_caption_buttons_mask_width();
++    int overrideCaptionButtonsHeight = StaticPrefs::
++        widget_ev_native_controls_patch_override_aero_caption_buttons_mask_height();
++
++    if (overrideCaptionButtonsWidth && overrideCaptionButtonsHeight) {
++      sCommandButtonBoxMetrics.cx = overrideCaptionButtonsWidth;
++      sCommandButtonBoxMetrics.cy = overrideCaptionButtonsHeight;
++      sCommandButtonBoxMetricsInitialized = true;
++      sTitlebarInfoPopulatedAero = true;
++    } else if (SUCCEEDED(DwmGetWindowAttribute(
++                   aWnd, DWMWA_CAPTION_BUTTON_BOUNDS, &captionButtons,
++                   sizeof(captionButtons)))) {
+       sCommandButtonBoxMetrics.cx =
+           captionButtons.right - captionButtons.left - 3;
+       sCommandButtonBoxMetrics.cy =
+@@ -197,7 +221,9 @@ void nsUXThemeData::UpdateTitlebarInfo(H
+   }
+ 
+   // NB: sTitlebarInfoPopulatedThemed is always true pre-vista.
+-  if (sTitlebarInfoPopulatedThemed || IsWin8OrLater()) return;
++  if (sTitlebarInfoPopulatedThemed ||
++      (IsWin8OrLater() && dwmCompositionEnabled))
++    return;
+ 
+   // Query a temporary, visible window with command buttons to get
+   // the right metrics.
+@@ -227,9 +253,7 @@ void nsUXThemeData::UpdateTitlebarInfo(H
+   // We try to avoid activating this window, but on Aero basic (aero without
+   // compositor) and aero lite (special theme for win server 2012/2013) we may
+   // get the wrong information if the window isn't activated, so we have to:
+-  if (sThemeId == WindowsTheme::AeroLite ||
+-      (sThemeId == WindowsTheme::Aero &&
+-       !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled())) {
++  if (!dwmCompositionEnabled) {
+     showType = SW_SHOW;
+   }
+   ShowWindow(hWnd, showType);
+diff --git a/widget/windows/nsUXThemeData.h b/widget/windows/nsUXThemeData.h
+--- a/widget/windows/nsUXThemeData.h
++++ b/widget/windows/nsUXThemeData.h
+@@ -19,6 +19,7 @@
+ enum nsUXThemeClass {
+   eUXButton = 0,
+   eUXEdit,
++  eUXTooltip,
+   eUXRebar,
+   eUXMediaRebar,
+   eUXCommunicationsRebar,
+@@ -28,8 +29,10 @@ enum nsUXThemeClass {
+   eUXCommunicationsToolbar,
+   eUXProgress,
+   eUXTab,
++  eUXScrollbar,
+   eUXTrackbar,
+   eUXSpin,
++  eUXStatus,
+   eUXCombobox,
+   eUXHeader,
+   eUXListview,
+diff --git a/widget/windows/nsWindow.cpp b/widget/windows/nsWindow.cpp
+--- a/widget/windows/nsWindow.cpp
++++ b/widget/windows/nsWindow.cpp
+@@ -1736,6 +1736,11 @@ nsWindow* nsWindow::GetParentWindowBase(
+  **************************************************************/
+ 
+ void nsWindow::Show(bool bState) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+   if (bState && mIsShowingPreXULSkeletonUI) {
+     // The first time we decide to actually show the window is when we decide
+     // that we've taken over the window from the skeleton UI, and we should
+@@ -1763,8 +1768,7 @@ void nsWindow::Show(bool bState) {
+         return false;
+       }
+       if (HasBogusPopupsDropShadowOnMultiMonitor() &&
+-          WinUtils::GetMonitorCount() > 1 &&
+-          !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++          WinUtils::GetMonitorCount() > 1 && !dwmCompositionEnabled) {
+         // See bug 603793. When we try to draw D3D9/10 windows with a drop
+         // shadow without the DWM on a secondary monitor, windows fails to
+         // composite our windows correctly. We therefor switch off the drop
+@@ -2787,7 +2791,10 @@ void nsWindow::UpdateDarkModeToolbar() {
+ }
+ 
+ LayoutDeviceIntMargin nsWindow::NormalWindowNonClientOffset() const {
+-  bool glass = gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++  bool glass =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
+ 
+   LayoutDeviceIntMargin nonClientOffset;
+ 
+@@ -2860,6 +2867,11 @@ LayoutDeviceIntMargin nsWindow::NormalWi
+  * or removed entirely.
+  */
+ bool nsWindow::UpdateNonClientMargins(bool aReflowWindow) {
++  int overrideWinVer =
++      StaticPrefs::widget_ev_native_controls_patch_override_win_version();
++  bool isWin10OrLater =
++      (overrideWinVer == 0 && IsWin10OrLater()) || overrideWinVer >= 10;
++
+   if (!mCustomNonClient) {
+     return false;
+   }
+@@ -2948,7 +2960,7 @@ bool nsWindow::UpdateNonClientMargins(bo
+     // a new issue where widget edges would sometimes appear to bleed into other
+     // displays (bug 1614218).
+     int verticalResize = 0;
+-    if (IsWin10OrLater()) {
++    if (isWin10OrLater) {
+       verticalResize =
+           WinUtils::GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+           (hasCaption ? WinUtils::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+@@ -2975,7 +2987,7 @@ bool nsWindow::UpdateNonClientMargins(bo
+       // to clear the portion of the NC region that is exposed by the
+       // hidden taskbar.  As above, we clear the bottom of the NC region
+       // when the taskbar is at the top of the screen.
+-      if (IsWin10OrLater()) {
++      if (isWin10OrLater) {
+         UINT clearEdge = (edge == ABE_TOP) ? ABE_BOTTOM : edge;
+         mClearNCEdge = Some(clearEdge);
+       }
+@@ -3314,6 +3326,11 @@ TransparencyMode nsWindow::GetTransparen
+ }
+ 
+ void nsWindow::SetTransparencyMode(TransparencyMode aMode) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+   nsWindow* window = GetTopLevelWindow(true);
+   MOZ_ASSERT(window);
+ 
+@@ -3322,8 +3339,7 @@ void nsWindow::SetTransparencyMode(Trans
+   }
+ 
+   if (WindowType::TopLevel == window->mWindowType &&
+-      mTransparencyMode != aMode &&
+-      !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++      mTransparencyMode != aMode && !dwmCompositionEnabled) {
+     NS_WARNING("Cannot set transparency mode on top-level windows.");
+     return;
+   }
+@@ -3378,6 +3394,11 @@ void nsWindow::UpdateWindowDraggingRegio
+ }
+ 
+ void nsWindow::UpdateGlass() {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+   MARGINS margins = mGlassMargins;
+ 
+   // DWMNCRP_USEWINDOWSTYLE - The non-client rendering area is
+@@ -3406,7 +3427,7 @@ void nsWindow::UpdateGlass() {
+            margins.cyBottomHeight));
+ 
+   // Extends the window frame behind the client area
+-  if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++  if (dwmCompositionEnabled) {
+     DwmExtendFrameIntoClientArea(mWnd, &margins);
+     DwmSetWindowAttribute(mWnd, DWMWA_NCRENDERING_POLICY, &policy,
+                           sizeof policy);
+@@ -3628,10 +3649,15 @@ NS_IMPL_ISUPPORTS0(FullscreenTransitionD
+ 
+ /* virtual */
+ bool nsWindow::PrepareForFullscreenTransition(nsISupports** aData) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+   // We don't support fullscreen transition when composition is not
+   // enabled, which could make the transition broken and annoying.
+   // See bug 1184201.
+-  if (!gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++  if (dwmCompositionEnabled) {
+     return false;
+   }
+ 
+@@ -4326,20 +4352,27 @@ nsresult nsWindow::OnDefaultButtonLoaded
+ 
+ void nsWindow::UpdateThemeGeometries(
+     const nsTArray<ThemeGeometry>& aThemeGeometries) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
++  int winVerOverride =
++      StaticPrefs::widget_ev_native_controls_patch_override_win_version();
++
+   RefPtr<WebRenderLayerManager> layerManager =
+       GetWindowRenderer() ? GetWindowRenderer()->AsWebRender() : nullptr;
+   if (!layerManager) {
+     return;
+   }
+ 
+-  if (!HasGlass() ||
+-      !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++  if (!HasGlass() || !dwmCompositionEnabled) {
+     return;
+   }
+ 
+   mWindowButtonsRect = Nothing();
+ 
+-  if (!IsWin10OrLater()) {
++  if (!((winVerOverride == 0 && IsWin10OrLater()) || winVerOverride >= 10)) {
+     for (size_t i = 0; i < aThemeGeometries.Length(); i++) {
+       if (aThemeGeometries[i].mType ==
+           nsNativeThemeWin::eThemeGeometryTypeWindowButtons) {
+@@ -5266,6 +5299,16 @@ bool nsWindow::ProcessMessage(UINT msg, 
+ // The main windows message processing method. Called by ProcessMessage.
+ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
+                                       LRESULT* aRetValue) {
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
++  int winVerOverride =
++      StaticPrefs::widget_ev_native_controls_patch_override_win_version();
++  bool isWin10 =
++      (winVerOverride == 0 && IsWin10OrLater()) || winVerOverride >= 10;
++
+   MSGResult msgResult(aRetValue);
+   if (ExternalHandlerProcessMessage(msg, wParam, lParam, msgResult)) {
+     return (msgResult.mConsumed || !mWnd);
+@@ -5287,11 +5330,10 @@ bool nsWindow::ProcessMessageInternal(UI
+ 
+   // Glass hit testing w/custom transparent margins
+   LRESULT dwmHitResult;
+-  if (mCustomNonClient &&
+-      gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled() &&
++  if (mCustomNonClient && dwmCompositionEnabled &&
+       /* We don't do this for win10 glass with a custom titlebar,
+        * in order to avoid the caption buttons breaking. */
+-      !(IsWin10OrLater() && HasGlass()) &&
++      !(isWin10 && HasGlass()) &&
+       DwmDefWindowProc(mWnd, msg, wParam, lParam, &dwmHitResult)) {
+     *aRetValue = dwmHitResult;
+     return true;
+@@ -5600,9 +5642,8 @@ bool nsWindow::ProcessMessageInternal(UI
+        * sending the message with an updated title
+        */
+ 
+-      if ((mSendingSetText &&
+-           gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) ||
+-          !mCustomNonClient || mNonClientMargins.top == -1)
++      if ((mSendingSetText && dwmCompositionEnabled) || !mCustomNonClient ||
++          mNonClientMargins.top == -1)
+         break;
+ 
+       {
+@@ -5641,7 +5682,7 @@ bool nsWindow::ProcessMessageInternal(UI
+ 
+       // There is a case that rendered result is not kept. Bug 1237617
+       if (wParam == TRUE && !gfxEnv::MOZ_DISABLE_FORCE_PRESENT() &&
+-          gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
++          dwmCompositionEnabled) {
+         NS_DispatchToMainThread(NewRunnableMethod(
+             "nsWindow::ForcePresent", this, &nsWindow::ForcePresent));
+       }
+@@ -5649,7 +5690,7 @@ bool nsWindow::ProcessMessageInternal(UI
+       // let the dwm handle nc painting on glass
+       // Never allow native painting if we are on fullscreen
+       if (mFrameState->GetSizeMode() != nsSizeMode_Fullscreen &&
+-          gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled())
++          dwmCompositionEnabled)
+         break;
+ 
+       if (wParam == TRUE) {
+@@ -5685,7 +5726,7 @@ bool nsWindow::ProcessMessageInternal(UI
+       if (!mCustomNonClient) break;
+ 
+       // let the dwm handle nc painting on glass
+-      if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) break;
++      if (dwmCompositionEnabled) break;
+ 
+       HRGN paintRgn = ExcludeNonClientFromPaintRegion((HRGN)wParam);
+       LRESULT res = CallWindowProcW(GetPrevWindowProc(), mWnd, msg,
+@@ -6775,12 +6816,21 @@ int32_t nsWindow::ClientMarginHitTestPoi
+ 
+     auto pt = mCachedHitTestPoint;
+ 
++    // If DWM composition is disabled, then under no circumstances do we want to
++    // run the following code. Doing so will only cause the caption buttons to
++    // flicker. It seems this was broken during a refactor sometime after
++    // Australis.
++    bool dwmCompositionEnabled =
++        StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++            ? false
++            : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
+     if (mWindowBtnRect[WindowButtonType::Minimize].Contains(pt)) {
+-      testResult = HTMINBUTTON;
++      testResult = dwmCompositionEnabled ? HTMINBUTTON : HTCLIENT;
+     } else if (mWindowBtnRect[WindowButtonType::Maximize].Contains(pt)) {
+-      testResult = HTMAXBUTTON;
++      testResult = dwmCompositionEnabled ? HTMAXBUTTON : HTCLIENT;
+     } else if (mWindowBtnRect[WindowButtonType::Close].Contains(pt)) {
+-      testResult = HTCLOSE;
++      testResult = dwmCompositionEnabled ? HTCLOSE : HTCLIENT;
+     } else if (!inResizeRegion) {
+       // If we're in the resize region, avoid overriding that with either a
+       // drag or a client result; resize takes priority over either (but not
+@@ -9065,7 +9115,12 @@ void nsWindow::GetCompositorWidgetInitDa
+ }
+ 
+ bool nsWindow::SynchronouslyRepaintOnResize() {
+-  return !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++  bool dwmCompositionEnabled =
++      StaticPrefs::widget_ev_native_controls_patch_force_dwm_report_off()
++          ? false
++          : gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
++
++  return !dwmCompositionEnabled;
+ }
+ 
+ void nsWindow::MaybeDispatchInitialFocusEvent() {
+diff --git a/xpcom/ds/StaticAtoms.py b/xpcom/ds/StaticAtoms.py
+--- a/xpcom/ds/StaticAtoms.py
++++ b/xpcom/ds/StaticAtoms.py
+@@ -2252,6 +2252,7 @@ STATIC_ATOMS = [
+     Atom("_moz_windows_classic", "-moz-windows-classic"),
+     Atom("_moz_windows_glass", "-moz-windows-glass"),
+     Atom("_moz_windows_non_native_menus", "-moz-windows-non-native-menus"),
++    Atom("_moz_ev_native_controls_patch", "-moz-ev-native-controls-patch"),
+     Atom("_moz_menubar_drag", "-moz-menubar-drag"),
+     Atom("_moz_device_pixel_ratio", "-moz-device-pixel-ratio"),
+     Atom("_moz_device_orientation", "-moz-device-orientation"),
+# HG changeset patch
+# User daylin <dcoop2004@gmail.com>
+# Date 1706144999 25200
+#      Wed Jan 24 18:09:59 2024 -0700
+# Node ID 8dd7ee03adcfa6445e74dbc68a7e5fed29f734b3
+# Parent  44299c5e5559ced8a0915c38439bb1f186c83d18
+Native Controls: Revise override caption button width/height
+
+# This is a patch that is applied on top of the 115.6.0 R2 patch. It simply revises this custom behaviour:
+
+diff --git a/widget/windows/nsUXThemeData.cpp b/widget/windows/nsUXThemeData.cpp
+--- a/widget/windows/nsUXThemeData.cpp
++++ b/widget/windows/nsUXThemeData.cpp
+@@ -200,22 +200,26 @@ void nsUXThemeData::UpdateTitlebarInfo(H
+     int overrideCaptionButtonsHeight = StaticPrefs::
+         widget_ev_native_controls_patch_override_aero_caption_buttons_mask_height();
+ 
+-    if (overrideCaptionButtonsWidth && overrideCaptionButtonsHeight) {
+-      sCommandButtonBoxMetrics.cx = overrideCaptionButtonsWidth;
+-      sCommandButtonBoxMetrics.cy = overrideCaptionButtonsHeight;
+-      sCommandButtonBoxMetricsInitialized = true;
+-      sTitlebarInfoPopulatedAero = true;
+-    } else if (SUCCEEDED(DwmGetWindowAttribute(
+-                   aWnd, DWMWA_CAPTION_BUTTON_BOUNDS, &captionButtons,
+-                   sizeof(captionButtons)))) {
++    if (SUCCEEDED(DwmGetWindowAttribute(aWnd, DWMWA_CAPTION_BUTTON_BOUNDS,
++                                        &captionButtons,
++                                        sizeof(captionButtons)))) {
+       sCommandButtonBoxMetrics.cx =
+           captionButtons.right - captionButtons.left - 3;
+       sCommandButtonBoxMetrics.cy =
+           (captionButtons.bottom - captionButtons.top) - 1;
++
++      if (overrideCaptionButtonsWidth > 0) {
++        sCommandButtonBoxMetrics.cx = overrideCaptionButtonsWidth;
++      }
++
++      if (overrideCaptionButtonsHeight > 0) {
++        sCommandButtonBoxMetrics.cy = overrideCaptionButtonsHeight;
++      }
++
+       sCommandButtonBoxMetricsInitialized = true;
+-      MOZ_ASSERT(
+-          sCommandButtonBoxMetrics.cx > 0 && sCommandButtonBoxMetrics.cy > 0,
+-          "We must not cache bad command button box dimensions");
++      // MOZ_ASSERT(
++      // sCommandButtonBoxMetrics.cx > 0 && sCommandButtonBoxMetrics.cy > 0,
++      // "We must not cache bad command button box dimensions");
+       sTitlebarInfoPopulatedAero = true;
+     }
+   }
+# HG changeset patch
+# User daylin <dcoop2004@gmail.com>
+# Date 1709758559 25200
+#      Wed Mar 06 13:55:59 2024 -0700
+# Node ID 9ad516097afc87044e910ce9c6de2f927d228a41
+# Parent  8dd7ee03adcfa6445e74dbc68a7e5fed29f734b3
+improve native controls 115.8 R2
+
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -15313,6 +15313,16 @@
+   type: int32_t
+   value: 0
+   mirror: always
++  
++- name: widget.ev-native-controls-patch.scrollbar-style
++  type: int32_t
++  value: 0
++  mirror: always
++  
++- name: widget.ev-native-controls-patch.tooltip-style
++  type: int32_t
++  value: 0
++  mirror: always
+ 
+ # Global user preference for disabling native theme in content processes.
+ #
+diff --git a/widget/ScrollbarDrawingWin.h b/widget/ScrollbarDrawingWin.h
+--- a/widget/ScrollbarDrawingWin.h
++++ b/widget/ScrollbarDrawingWin.h
+@@ -12,6 +12,9 @@
+ 
+ namespace mozilla::widget {
+ 
++// Needs to be a public export for Photon styles.
++const ComputedStyle* GetCustomScrollbarStyle(nsIFrame* aFrame);
++
+ class ScrollbarDrawingWin : public ScrollbarDrawing {
+  protected:
+   explicit ScrollbarDrawingWin(Kind aKind) : ScrollbarDrawing(aKind) {}
+diff --git a/widget/windows/nsLookAndFeel.cpp b/widget/windows/nsLookAndFeel.cpp
+--- a/widget/windows/nsLookAndFeel.cpp
++++ b/widget/windows/nsLookAndFeel.cpp
+@@ -576,7 +576,7 @@ nsresult nsLookAndFeel::NativeGetInt(Int
+ 
+       // Aero Glass is only available prior to Windows 8 when DWM is used.
+       aResult = (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled() &&
+-                 isWin8OrLater);
++                 !isWin8OrLater);
+       break;
+     }
+     case IntID::AlertNotificationOrigin:
+diff --git a/widget/windows/nsNativeThemeWin.cpp b/widget/windows/nsNativeThemeWin.cpp
+--- a/widget/windows/nsNativeThemeWin.cpp
++++ b/widget/windows/nsNativeThemeWin.cpp
+@@ -70,6 +70,24 @@ auto nsNativeThemeWin::IsWidgetNonNative
+                                          StyleAppearance aAppearance)
+     -> NonNative {
+   if (IsWidgetScrollbarPart(aAppearance)) {
++    if (StaticPrefs::widget_ev_native_controls_patch_scrollbar_style() == 0) {
++      return NonNative::No;
++    } else if (StaticPrefs::widget_ev_native_controls_patch_scrollbar_style() ==
++               1) {
++      return NonNative::Always;
++    } else /* >= 2, < 0 */
++    {
++      // Photon behaviour: native on light, non-native on dark or custom styles:
++      if (GetCustomScrollbarStyle(aFrame) == nullptr) {
++        return NonNative::No;
++      } else {
++        return NonNative::Always;
++      }
++    }
++  }
++
++  if (aAppearance == StyleAppearance::Tooltip &&
++      StaticPrefs::widget_ev_native_controls_patch_tooltip_style() == 0) {
+     return NonNative::No;
+   }
+ 
