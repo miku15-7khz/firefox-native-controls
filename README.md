@@ -8,6 +8,14 @@ The only potential caveat: Widevine support. I don't know if this is controlled 
 
 At the moment, it is required that you still manually disable non-native controls in order to use this.
 
+## I installed this because of a theme, and I get an error!
+
+Here are some simple troubleshooting guidelines which fix 99% of reported problems:
+
+If the error mentions "**XULRunner**" and something about a **platform version mismatch**, then you need to download a version of this patch corresponding to your specific Firefox version.
+
+If the error says something about **XPCOM failing to initialise**, then it's most likely that you have a platform architecture mismatch. That means you're using a 32-bit version of Firefox. Mozilla just gives random 64-bit Windows users a 32-bit version for some reason, or at least I don't see any pattern. You can verify this quickly by seeing if Firefox is in "Program Files (x86)" instead of "Program Files". If you have a 32-bit version, then you just need to install the 64-bit version, which you can find on https://ftp.mozilla.org/pub/firefox/releases/
+
 ## Change documentation
 
 - [Scrollbars](docs/scrollbars.md)
