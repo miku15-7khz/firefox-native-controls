@@ -1,7 +1,5 @@
 # Firefox Native Controls
 
-## This is an archive copy. There will be no updates from this repo.
-
 Simple source code patches that re-enable and reimplement native controls for modern versions of Firefox. Requires modifying Firefox installation files, but you don't need to use a custom build of Firefox altogether.
 
 It is still recommended that you use ESR and disable automatic updates. Unfortunately, updating is just a sacrifice you have to make to theming. However, I may write a custom updater with this mod in consideration, eventually. **All prebuilt releases are distributed for ESR releases of Firefox.**
