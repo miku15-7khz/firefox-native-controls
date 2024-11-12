@@ -37,6 +37,13 @@ Step-by-step:
 
 **Note:** Unfortunately, it's not possible to create one distribution that works across patches. This is because the XUL version check is baked into `firefox.exe` rather than `xul.dll`.
 
+## Common problems
+
+- I get a black box over the system minimise/maximise/close buttons when reporting the OS version as Windows 7 or 8, like in the following image.
+
+  ![Preview image](docs/img/black_caption_buttons.png)
+  - This is a problem with Firefox's WebRender engine. I'm not entirely sure why this occurs, or how to fix it, but the only workaround that I could find is using WebRender software rendering mode. So, open `about:config` and set `gfx.webrender.software` to true.
+
 ## Building from source
 
 [Clone Firefox for yourself](https://firefox-source-docs.mozilla.org/setup/index.html), and then mix in the patches as needed. Note that when you clone, it will put in the `mozilla-central` branch. You probably don't want this as these correspond to the latest Nightly builds, which will mean that the produced `xul.dll` binary will likely be incompatible with the current build environment.
