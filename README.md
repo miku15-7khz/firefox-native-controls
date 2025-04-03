@@ -1,4 +1,4 @@
-I decided to fork this for the 3 people still using Firefox on Windows 7 who use this.
+I decided to fork this for the 3 people still using Firefox on Windows 7 who use this. I'll keep patching the xul.dll utill either the patch doesnt work or Firefox drops ESR 115 (I don't know how this works, I just figured out to patch it and build it).
 
 # Firefox Native Controls
 
