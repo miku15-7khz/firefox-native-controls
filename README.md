@@ -1,3 +1,5 @@
+I decided to fork this for the 3 people still using Firefox on Windows 7 who use this.
+
 # Firefox Native Controls
 
 Simple source code patches that re-enable and reimplement native controls for modern versions of Firefox. Requires modifying Firefox installation files, but you don't need to use a custom build of Firefox altogether.
