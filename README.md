@@ -1,3 +1,7 @@
+I decided to fork this for the 3 people still using Firefox on Windows 7 who use this. I'll keep patching the xul.dll until either the patch doesnt work or Firefox drops ESR 115 (I don't know how this works, I just figured out to patch it and build it). Below is the original readme.
+
+Originally forked from https://github.com/kawapure/firefox-native-controls but I made the repo private for a few months so it removed the fork link, so I remade the fork. 
+
 # Firefox Native Controls
 
 Simple source code patches that re-enable and reimplement native controls for modern versions of Firefox. Requires modifying Firefox installation files, but you don't need to use a custom build of Firefox altogether.
