@@ -1,4 +1,6 @@
-I decided to fork this for the 3 people still using Firefox on Windows 7 who use this. I'll keep patching the xul.dll until either the patch doesnt work or Firefox drops ESR 115 (I don't know how this works, I just figured out to patch it and build it). Below is the original readme. I will update this either to the end of ESU Year 6 (January 2026) or to the end-of-life for Firefox ESR 115, depending on if I want to spend my time working on this.
+Check out https://github.com/xYannikx/firefox-native-controls as an alternative. It's been fun doing these 4 builds and figuring out the mozilla build system, but as someone else is maintaining releases I have decided to drop the project.
+
+I decided to fork this for the 3 people still using Firefox on Windows 7 who use this. I'll keep patching the xul.dll until either the patch doesnt work or Firefox drops ESR 115 (I don't know how this works, I just figured out to patch it and build it). Below is the original readme. I will update this either to the end of ESU Year 6 (January 2026) or to the end-of-life for Firefox ESR 115, depending on if I want to spend my time working on this (edit: see above).
 
 Originally forked from https://github.com/kawapure/firefox-native-controls but I made the repo private for a few months so it removed the fork link, so I remade the fork. 
 
